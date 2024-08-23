@@ -1,0 +1,412 @@
+diff --git a/fastchat/eval/get_model_answer.py b/fastchat/eval/get_model_answer.py
+index 0f01a4d..f989a63 100644
+--- a/fastchat/eval/get_model_answer.py
++++ b/fastchat/eval/get_model_answer.py
+@@ -1,6 +1,7 @@
+ import argparse
+ from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaForCausalLM
+ import torch
++import torch_mlu
+ import os
+ import json
+ from tqdm import tqdm
+@@ -42,7 +43,7 @@ def get_model_answers(model_path, model_id, question_jsons):
+     tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+     model = AutoModelForCausalLM.from_pretrained(
+         model_path, low_cpu_mem_usage=True, torch_dtype=torch.float16
+-    ).cuda()
++    ).mlu()
+ 
+     ans_jsons = []
+     for i, line in enumerate(tqdm(question_jsons)):
+@@ -55,7 +56,7 @@ def get_model_answers(model_path, model_id, question_jsons):
+         prompt = conv.get_prompt()
+         input_ids = tokenizer([prompt]).input_ids
+         output_ids = model.generate(
+-            torch.as_tensor(input_ids).cuda(),
++            torch.as_tensor(input_ids).mlu(),
+             do_sample=True,
+             temperature=0.7,
+             max_new_tokens=1024,
+diff --git a/fastchat/model/apply_delta.py b/fastchat/model/apply_delta.py
+index ba1c06d..fb5742c 100644
+--- a/fastchat/model/apply_delta.py
++++ b/fastchat/model/apply_delta.py
+@@ -14,6 +14,7 @@ import tempfile
+ 
+ from huggingface_hub import snapshot_download
+ import torch
++import torch_mlu
+ from torch import nn
+ from tqdm import tqdm
+ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+diff --git a/fastchat/model/apply_lora.py b/fastchat/model/apply_lora.py
+index 870e64a..b8b01f8 100644
+--- a/fastchat/model/apply_lora.py
++++ b/fastchat/model/apply_lora.py
+@@ -10,6 +10,7 @@ pip3 install git+https://github.com/huggingface/peft.git@2822398fbe896f25d4dac5e
+ import argparse
+ 
+ import torch
++import torch_mlu
+ from peft import PeftModel
+ from transformers import AutoTokenizer, AutoModelForCausalLM
+ 
+diff --git a/fastchat/model/chatglm_model.py b/fastchat/model/chatglm_model.py
+index 2a79b53..0970d16 100644
+--- a/fastchat/model/chatglm_model.py
++++ b/fastchat/model/chatglm_model.py
+@@ -1,4 +1,5 @@
+ import torch
++import torch_mlu
+ from typing import List, Tuple
+ 
+ @torch.no_grad()
+diff --git a/fastchat/model/compression.py b/fastchat/model/compression.py
+index e06c2b2..e2a95cf 100644
+--- a/fastchat/model/compression.py
++++ b/fastchat/model/compression.py
+@@ -6,6 +6,7 @@ import os
+ from accelerate import init_empty_weights
+ from accelerate.utils import set_module_tensor_to_device
+ import torch
++import torch_mlu
+ from torch import Tensor
+ import torch.nn as nn
+ from torch.nn import functional as F
+@@ -125,7 +126,7 @@ def load_compress_model(model_path, device, torch_dtype):
+             tmp_state_dict[name] = None
+             tensor = None
+             gc.collect()
+-            torch.cuda.empty_cache()
++            torch.mlu.empty_cache()
+ 
+     for name in model.state_dict():
+         if name not in linear_weights:
+diff --git a/fastchat/model/convert_fp16.py b/fastchat/model/convert_fp16.py
+index efc40aa..4cc16b0 100644
+--- a/fastchat/model/convert_fp16.py
++++ b/fastchat/model/convert_fp16.py
+@@ -6,6 +6,7 @@ import argparse
+ 
+ from transformers import AutoTokenizer, AutoModelForCausalLM
+ import torch
++import torch_mlu
+ 
+ 
+ def convert_fp16(in_checkpoint, out_checkpoint):
+diff --git a/fastchat/model/make_delta.py b/fastchat/model/make_delta.py
+index 480ba8f..d84960b 100644
+--- a/fastchat/model/make_delta.py
++++ b/fastchat/model/make_delta.py
+@@ -7,6 +7,7 @@ python3 -m fastchat.model.make_delta --base ~/model_weights/llama-13b --target ~
+ import argparse
+ 
+ import torch
++import torch_mlu
+ from tqdm import tqdm
+ from transformers import AutoTokenizer, AutoModelForCausalLM
+ 
+diff --git a/fastchat/model/model_adapter.py b/fastchat/model/model_adapter.py
+index 13c8e3b..22e682f 100644
+--- a/fastchat/model/model_adapter.py
++++ b/fastchat/model/model_adapter.py
+@@ -3,9 +3,10 @@
+ import sys
+ from typing import List, Optional
+ import warnings
+-from functools import cache
+-
++#from functools import cache
++from functools import lru_cache
+ import torch
++import torch_mlu
+ from transformers import (
+     AutoConfig,
+     AutoModel,
+@@ -51,7 +52,7 @@ def register_model_adapter(cls):
+     model_adapters.append(cls())
+ 
+ 
+-@cache
++@lru_cache(maxsize=None)
+ def get_model_adapter(model_path: str) -> BaseAdapter:
+     """Get a model adapter for a model_path."""
+     for adapter in model_adapters:
+@@ -77,7 +78,7 @@ def raise_warning_for_incompatible_cpu_offloading_configuration(
+                 "Continuing without cpu-offloading enabled\n"
+             )
+             return False
+-        if device != "cuda":
++        if device != "mlu":
+             warnings.warn(
+                 "CPU-offloading is only enabled when using CUDA-devices\n"
+                 "Continuing without cpu-offloading enabled\n"
+@@ -103,7 +104,7 @@ def load_model(
+     )
+     if device == "cpu":
+         kwargs = {"torch_dtype": torch.float32}
+-    elif device == "cuda":
++    elif device == "mlu":
+         kwargs = {"torch_dtype": torch.float16}
+         if num_gpus != 1:
+             kwargs["device_map"] = "auto"
+@@ -151,7 +152,7 @@ def load_model(
+     adapter = get_model_adapter(model_path)
+     model, tokenizer = adapter.load_model(model_path, kwargs)
+ 
+-    if (device == "cuda" and num_gpus == 1 and not cpu_offloading) or device == "mps":
++    if (device == "mlu" and num_gpus == 1 and not cpu_offloading) or device == "mps":
+         model.to(device)
+ 
+     if debug:
+@@ -175,8 +176,8 @@ def add_model_args(parser):
+     parser.add_argument(
+         "--device",
+         type=str,
+-        choices=["cpu", "cuda", "mps"],
+-        default="cuda",
++        choices=["cpu", "mlu", "mps"],
++        default="mlu",
+         help="The device type",
+     )
+     parser.add_argument(
+diff --git a/fastchat/model/monkey_patch_non_inplace.py b/fastchat/model/monkey_patch_non_inplace.py
+index 9661d70..7f9a461 100644
+--- a/fastchat/model/monkey_patch_non_inplace.py
++++ b/fastchat/model/monkey_patch_non_inplace.py
+@@ -6,6 +6,7 @@ import math
+ from typing import List, Optional, Tuple
+ 
+ import torch
++import torch_mlu
+ from torch import nn
+ import transformers
+ 
+diff --git a/fastchat/model/rwkv_model.py b/fastchat/model/rwkv_model.py
+index 9aea609..ba54a72 100644
+--- a/fastchat/model/rwkv_model.py
++++ b/fastchat/model/rwkv_model.py
+@@ -3,6 +3,7 @@ from types import SimpleNamespace
+ import warnings
+ 
+ import torch
++import torch_mlu
+ 
+ os.environ["RWKV_JIT_ON"] = "1"
+ os.environ["RWKV_CUDA_ON"] = "1"
+@@ -17,10 +18,10 @@ class RwkvModel:
+             "Experimental support. Please use ChatRWKV if you want to chat with RWKV"
+         )
+         self.config = SimpleNamespace(is_encoder_decoder=False)
+-        self.model = RWKV(model=model_path, strategy="cuda fp16")
++        self.model = RWKV(model=model_path, strategy="mlu fp16")
+ 
+     def to(self, target):
+-        assert target == "cuda"
++        assert target == "mlu"
+ 
+     def __call__(self, input_ids, use_cache, past_key_values=None):
+         assert use_cache == True
+diff --git a/fastchat/serve/cacheflow_worker.py b/fastchat/serve/cacheflow_worker.py
+index 8d2fb89..0be97be 100644
+--- a/fastchat/serve/cacheflow_worker.py
++++ b/fastchat/serve/cacheflow_worker.py
+@@ -18,6 +18,7 @@ from typing import List, Dict
+ 
+ import requests
+ import torch
++import torch_mlu
+ import uvicorn
+ from fastapi import FastAPI, Request, BackgroundTasks
+ from fastapi.responses import StreamingResponse
+@@ -36,7 +37,7 @@ TIMEOUT_TO_PREVENT_DEADLOCK = 1  # seconds
+ worker_id = str(uuid.uuid4())[:6]
+ logger = build_logger("model_worker", f"model_worker_{worker_id}.log")
+ global_counter = 0
+-seed = torch.cuda.current_device()
++seed = torch.mlu.current_device()
+ 
+ 
+ def heart_beat_worker(controller):
+diff --git a/fastchat/serve/huggingface_api.py b/fastchat/serve/huggingface_api.py
+index 643257d..36c2860 100644
+--- a/fastchat/serve/huggingface_api.py
++++ b/fastchat/serve/huggingface_api.py
+@@ -7,6 +7,7 @@ import argparse
+ import json
+ 
+ import torch
++import torch_mlu
+ from transformers import AutoTokenizer, AutoModelForCausalLM
+ 
+ from fastchat.model import load_model, get_conversation_template, add_model_args
+@@ -33,7 +34,7 @@ def main(args):
+ 
+     input_ids = tokenizer([prompt]).input_ids
+     output_ids = model.generate(
+-        torch.as_tensor(input_ids).cuda(),
++        torch.as_tensor(input_ids).mlu(),
+         do_sample=True,
+         temperature=args.temperature,
+         max_new_tokens=args.max_new_tokens,
+diff --git a/fastchat/serve/inference.py b/fastchat/serve/inference.py
+index cec5982..a3851ca 100644
+--- a/fastchat/serve/inference.py
++++ b/fastchat/serve/inference.py
+@@ -8,6 +8,7 @@ import warnings
+ 
+ import psutil
+ import torch
++import torch_mlu
+ from transformers import (
+     AutoTokenizer,
+     AutoModelForCausalLM,
+@@ -47,10 +48,11 @@ def prepare_logits_processor(
+     return processor_list
+ 
+ 
+-@torch.inference_mode()
++#@torch.inference_mode()
+ def generate_stream(
+     model, tokenizer, params, device, context_len=2048, stream_interval=2
+ ):
++    torch.set_grad_enabled(False)
+     prompt = params["prompt"]
+     len_prompt = len(prompt)
+     temperature = float(params.get("temperature", 1.0))
+@@ -216,7 +218,7 @@ def generate_stream(
+     # clean
+     del past_key_values, out
+     gc.collect()
+-    torch.cuda.empty_cache()
++    torch.mlu.empty_cache()
+ 
+ 
+ class ChatIO(abc.ABC):
+diff --git a/fastchat/serve/model_worker.py b/fastchat/serve/model_worker.py
+index 9c3a27b..307ed85 100644
+--- a/fastchat/serve/model_worker.py
++++ b/fastchat/serve/model_worker.py
+@@ -31,6 +31,7 @@ except ImportError:
+         AutoModel,
+     )
+ import torch
++import torch_mlu
+ import uvicorn
+ 
+ from fastchat.constants import WORKER_HEART_BEAT_INTERVAL, ErrorCode
+@@ -185,7 +186,7 @@ class ModelWorker:
+                 if "logprobs" in output:
+                     ret["logprobs"] = output["logprobs"]
+                 yield json.dumps(ret).encode() + b"\0"
+-        except torch.cuda.OutOfMemoryError:
++        except torch.mlu.OutOfMemoryError:
+             ret = {
+                 "text": server_error_msg,
+                 "error_code": ErrorCode.CUDA_OUT_OF_MEMORY,
+@@ -218,7 +219,7 @@ class ModelWorker:
+                 ret["finish_reason"] = output["finish_reason"]
+             if "logprobs" in output:
+                 ret["logprobs"] = output["logprobs"]
+-        except torch.cuda.OutOfMemoryError:
++        except torch.mlu.OutOfMemoryError:
+             ret = {
+                 "text": server_error_msg,
+                 "error_code": ErrorCode.CUDA_OUT_OF_MEMORY,
+@@ -249,7 +250,7 @@ class ModelWorker:
+                     "token_num": len(self.tokenizer(params["input"]).input_ids),
+                 }
+             )
+-        except torch.cuda.OutOfMemoryError:
++        except torch.mlu.OutOfMemoryError:
+             ret = {
+                 "text": server_error_msg,
+                 "error_code": ErrorCode.CUDA_OUT_OF_MEMORY,
+diff --git a/fastchat/train/llama_flash_attn_monkey_patch.py b/fastchat/train/llama_flash_attn_monkey_patch.py
+index 00fc39e..adc4071 100644
+--- a/fastchat/train/llama_flash_attn_monkey_patch.py
++++ b/fastchat/train/llama_flash_attn_monkey_patch.py
+@@ -1,6 +1,7 @@
+ from typing import List, Optional, Tuple
+ 
+ import torch
++import torch_mlu
+ from torch import nn
+ 
+ import transformers
+diff --git a/fastchat/train/train.py b/fastchat/train/train.py
+index 6a369f1..202976d 100644
+--- a/fastchat/train/train.py
++++ b/fastchat/train/train.py
+@@ -21,6 +21,7 @@ from typing import Dict, Optional, Sequence
+ 
+ import numpy as np
+ import torch
++import torch_mlu
+ from torch.utils.data import Dataset
+ import transformers
+ from transformers import Trainer
+diff --git a/fastchat/train/train_flant5.py b/fastchat/train/train_flant5.py
+old mode 100755
+new mode 100644
+index 5200a51..6f40cea
+--- a/fastchat/train/train_flant5.py
++++ b/fastchat/train/train_flant5.py
+@@ -24,6 +24,7 @@ import pathlib
+ from typing import Dict, Optional, Sequence
+ 
+ import torch
++import torch_mlu
+ 
+ import transformers
+ from torch.utils.data import Dataset
+diff --git a/fastchat/utils.py b/fastchat/utils.py
+index fd27cf4..90c0589 100644
+--- a/fastchat/utils.py
++++ b/fastchat/utils.py
+@@ -10,6 +10,7 @@ import warnings
+ 
+ import requests
+ import torch
++import torch_mlu
+ 
+ from fastchat.constants import LOGDIR
+ 
+@@ -126,17 +127,17 @@ def get_gpu_memory(max_gpus=None):
+     """Get available memory for each GPU."""
+     gpu_memory = []
+     num_gpus = (
+-        torch.cuda.device_count()
++        torch.mlu.device_count()
+         if max_gpus is None
+-        else min(max_gpus, torch.cuda.device_count())
++        else min(max_gpus, torch.mlu.device_count())
+     )
+ 
+     for gpu_id in range(num_gpus):
+-        with torch.cuda.device(gpu_id):
+-            device = torch.cuda.current_device()
+-            gpu_properties = torch.cuda.get_device_properties(device)
++        with torch.mlu.device(gpu_id):
++            device = torch.mlu.current_device()
++            gpu_properties = torch.mlu.get_device_properties(device)
+             total_memory = gpu_properties.total_memory / (1024**3)
+-            allocated_memory = torch.cuda.memory_allocated() / (1024**3)
++            allocated_memory = torch.mlu.memory_allocated() / (1024**3)
+             available_memory = total_memory - allocated_memory
+             gpu_memory.append(available_memory)
+     return gpu_memory
+diff --git a/pyproject.toml b/pyproject.toml
+index daecfc1..62e2fc7 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -7,7 +7,7 @@ name = "fschat"
+ version = "0.2.7"
+ description = "An open platform for training, serving, and evaluating large language model based chatbots."
+ readme = "README.md"
+-requires-python = ">=3.8"
++requires-python = ">=3.7"
+ classifiers = [
+     "Programming Language :: Python :: 3",
+     "License :: OSI Approved :: Apache Software License",

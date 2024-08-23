@@ -1,0 +1,650 @@
+diff --git a/demo.py b/demo.py
+index b3659f1..941c992 100644
+--- a/demo.py
++++ b/demo.py
+@@ -4,6 +4,7 @@ import random
+ 
+ import numpy as np
+ import torch
++import torch_mlu
+ import torch.backends.cudnn as cudnn
+ import gradio as gr
+ 
+@@ -57,11 +58,11 @@ cfg = Config(args)
+ model_config = cfg.model_cfg
+ model_config.device_8bit = args.gpu_id
+ model_cls = registry.get_model_class(model_config.arch)
+-model = model_cls.from_config(model_config).to('cuda:{}'.format(args.gpu_id))
++model = model_cls.from_config(model_config).to('mlu:{}'.format(args.gpu_id))
+ 
+ vis_processor_cfg = cfg.datasets_cfg.cc_sbu_align.vis_processor.train
+ vis_processor = registry.get_processor_class(vis_processor_cfg.name).from_config(vis_processor_cfg)
+-chat = Chat(model, vis_processor, device='cuda:{}'.format(args.gpu_id))
++chat = Chat(model, vis_processor, device='mlu:{}'.format(args.gpu_id))
+ print('Initialization Finished')
+ 
+ # ========================================
+diff --git a/eval_configs/minigpt4_eval.yaml b/eval_configs/minigpt4_eval.yaml
+index f9e55a3..0bf99dd 100644
+--- a/eval_configs/minigpt4_eval.yaml
++++ b/eval_configs/minigpt4_eval.yaml
+@@ -8,7 +8,7 @@ model:
+   low_resource: True
+   prompt_path: "prompts/alignment.txt"
+   prompt_template: '###Human: {} ###Assistant: '
+-  ckpt: '/path/to/pretrained/ckpt/'
++  ckpt: '/workspace/prerained_minigpt4_7b.pth'
+ 
+ 
+ datasets:
+diff --git a/minigpt4/common/config.py b/minigpt4/common/config.py
+index e184b1f..54ad368 100644
+--- a/minigpt4/common/config.py
++++ b/minigpt4/common/config.py
+@@ -405,8 +405,8 @@ def create_runner_config_validator():
+     validator.add_argument(
+         "device",
+         type=str,
+-        choices=["cpu", "cuda"],
+-        help="Device to use. Support 'cuda' or 'cpu' as for now.",
++        choices=["cpu", "mlu","cuda"],
++        help="Device to use. Support 'mlu' or 'cpu' as for now.",
+     )
+     validator.add_argument(
+         "world_size",
+diff --git a/minigpt4/common/dist_utils.py b/minigpt4/common/dist_utils.py
+index 9280150..41c41a8 100644
+--- a/minigpt4/common/dist_utils.py
++++ b/minigpt4/common/dist_utils.py
+@@ -10,6 +10,7 @@ import functools
+ import os
+ 
+ import torch
++import torch_mlu
+ import torch.distributed as dist
+ import timm.models.hub as timm_hub
+ 
+@@ -61,7 +62,7 @@ def init_distributed_mode(args):
+         args.gpu = int(os.environ["LOCAL_RANK"])
+     elif "SLURM_PROCID" in os.environ:
+         args.rank = int(os.environ["SLURM_PROCID"])
+-        args.gpu = args.rank % torch.cuda.device_count()
++        args.gpu = args.rank % torch.mlu.device_count()
+     else:
+         print("Not using distributed mode")
+         args.distributed = False
+@@ -69,8 +70,8 @@ def init_distributed_mode(args):
+ 
+     args.distributed = True
+ 
+-    torch.cuda.set_device(args.gpu)
+-    args.dist_backend = "nccl"
++    torch.mlu.set_device(args.gpu)
++    args.dist_backend = "cncl"
+     print(
+         "| distributed init (rank {}, world {}): {}".format(
+             args.rank, args.world_size, args.dist_url
+diff --git a/minigpt4/common/logger.py b/minigpt4/common/logger.py
+index 9a5a727..acb30dd 100644
+--- a/minigpt4/common/logger.py
++++ b/minigpt4/common/logger.py
+@@ -11,6 +11,7 @@ import time
+ from collections import defaultdict, deque
+ 
+ import torch
++import torch_mlu
+ import torch.distributed as dist
+ 
+ from minigpt4.common import dist_utils
+@@ -40,7 +41,7 @@ class SmoothedValue(object):
+         """
+         if not dist_utils.is_dist_avail_and_initialized():
+             return
+-        t = torch.tensor([self.count, self.total], dtype=torch.float64, device="cuda")
++        t = torch.tensor([self.count, self.total], dtype=torch.float64, device="mlu")
+         dist.barrier()
+         dist.all_reduce(t)
+         t = t.tolist()
+@@ -136,7 +137,7 @@ class MetricLogger(object):
+             "time: {time}",
+             "data: {data}",
+         ]
+-        if torch.cuda.is_available():
++        if torch.mlu.is_available():
+             log_msg.append("max mem: {memory:.0f}")
+         log_msg = self.delimiter.join(log_msg)
+         MB = 1024.0 * 1024.0
+@@ -147,7 +148,7 @@ class MetricLogger(object):
+             if i % print_freq == 0 or i == len(iterable) - 1:
+                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
+                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
+-                if torch.cuda.is_available():
++                if torch.mlu.is_available():
+                     print(
+                         log_msg.format(
+                             i,
+@@ -156,7 +157,7 @@ class MetricLogger(object):
+                             meters=str(self),
+                             time=str(iter_time),
+                             data=str(data_time),
+-                            memory=torch.cuda.max_memory_allocated() / MB,
++                            memory=torch.mlu.max_memory_allocated() / MB,
+                         )
+                     )
+                 else:
+diff --git a/minigpt4/configs/datasets/cc_sbu/align.yaml b/minigpt4/configs/datasets/cc_sbu/align.yaml
+index 5710834..eced05e 100644
+--- a/minigpt4/configs/datasets/cc_sbu/align.yaml
++++ b/minigpt4/configs/datasets/cc_sbu/align.yaml
+@@ -2,4 +2,4 @@ datasets:
+   cc_sbu_align:
+     data_type: images
+     build_info:
+-      storage: /path/to/cc_sbu_align/
++      storage: /workspace/MiniGPT-4_mlu/cc_sbu_align/
+diff --git a/minigpt4/configs/models/minigpt4.yaml b/minigpt4/configs/models/minigpt4.yaml
+index 87af448..f27548f 100644
+--- a/minigpt4/configs/models/minigpt4.yaml
++++ b/minigpt4/configs/models/minigpt4.yaml
+@@ -13,7 +13,7 @@ model:
+   num_query_token: 32
+ 
+   # Vicuna
+-  llama_model: "/path/to/vicuna/weights/"
++  llama_model: "/workspace/vicuna-7b-all-v1.1"
+ 
+   # generation configs
+   prompt: ""
+diff --git a/minigpt4/conversation/conversation.py b/minigpt4/conversation/conversation.py
+index 676d89f..36c3384 100644
+--- a/minigpt4/conversation/conversation.py
++++ b/minigpt4/conversation/conversation.py
+@@ -3,6 +3,7 @@ import time
+ from PIL import Image
+ 
+ import torch
++import torch_mlu
+ from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer
+ from transformers import StoppingCriteria, StoppingCriteriaList
+ 
+@@ -119,7 +120,7 @@ CONV_VISION = Conversation(
+ 
+ 
+ class Chat:
+-    def __init__(self, model, vis_processor, device='cuda:0'):
++    def __init__(self, model, vis_processor, device='mlu:0'):
+         self.device = device
+         self.model = model
+         self.vis_processor = vis_processor
+diff --git a/minigpt4/datasets/data_utils.py b/minigpt4/datasets/data_utils.py
+index cf6497f..2ba7890 100644
+--- a/minigpt4/datasets/data_utils.py
++++ b/minigpt4/datasets/data_utils.py
+@@ -20,6 +20,7 @@ from decord import VideoReader
+ import webdataset as wds
+ import numpy as np
+ import torch
++import torch_mlu
+ from torch.utils.data.dataset import IterableDataset
+ 
+ from minigpt4.common.registry import registry
+@@ -80,16 +81,16 @@ def apply_to_sample(f, sample):
+     return _apply(sample)
+ 
+ 
+-def move_to_cuda(sample):
+-    def _move_to_cuda(tensor):
+-        return tensor.cuda()
++def move_to_mlu(sample):
++    def _move_to_mlu(tensor):
++        return tensor.mlu()
+ 
+-    return apply_to_sample(_move_to_cuda, sample)
++    return apply_to_sample(_move_to_mlu, sample)
+ 
+ 
+-def prepare_sample(samples, cuda_enabled=True):
+-    if cuda_enabled:
+-        samples = move_to_cuda(samples)
++def prepare_sample(samples, mlu_enabled=True):
++    if mlu_enabled:
++        samples = move_to_mlu(samples)
+ 
+     # TODO fp16 support
+ 
+diff --git a/minigpt4/datasets/datasets/dataloader_utils.py b/minigpt4/datasets/datasets/dataloader_utils.py
+index 8eaa3a5..2dbe647 100644
+--- a/minigpt4/datasets/datasets/dataloader_utils.py
++++ b/minigpt4/datasets/datasets/dataloader_utils.py
+@@ -8,7 +8,8 @@
+ import time
+ import random
+ import torch
+-from minigpt4.datasets.data_utils import move_to_cuda
++import torch_mlu
++from minigpt4.datasets.data_utils import move_to_mlu
+ from torch.utils.data import DataLoader
+ 
+ 
+@@ -47,13 +48,13 @@ class PrefetchLoader(object):
+     """
+     Modified from https://github.com/ChenRocks/UNITER.
+ 
+-    overlap compute and cuda data transfer
++    overlap compute and mlu data transfer
+     (copied and then modified from nvidia apex)
+     """
+ 
+     def __init__(self, loader):
+         self.loader = loader
+-        self.stream = torch.cuda.Stream()
++        self.stream = torch.mlu.Stream()
+ 
+     def __iter__(self):
+         loader_it = iter(self.loader)
+@@ -82,14 +83,14 @@ class PrefetchLoader(object):
+         # if record_stream() doesn't work, another option is to make sure
+         # device inputs are created on the main stream.
+         # self.next_input_gpu = torch.empty_like(self.next_input,
+-        #                                        device='cuda')
++        #                                        device='mlu')
+         # self.next_target_gpu = torch.empty_like(self.next_target,
+-        #                                         device='cuda')
++        #                                         device='mlu')
+         # Need to make sure the memory allocated for next_* is not still in use
+         # by the main stream at the time we start copying to next_*:
+-        # self.stream.wait_stream(torch.cuda.current_stream())
+-        with torch.cuda.stream(self.stream):
+-            self.batch = move_to_cuda(self.batch)
++        # self.stream.wait_stream(torch.mlu.current_stream())
++        with torch.mlu.stream(self.stream):
++            self.batch = move_to_mlu(self.batch)
+             # more code for the alternative if record_stream() doesn't work:
+             # copy_ will record the use of the pinned source tensor in this
+             # side stream.
+@@ -99,10 +100,10 @@ class PrefetchLoader(object):
+             # self.next_target = self.next_target_gpu
+ 
+     def next(self, it):
+-        torch.cuda.current_stream().wait_stream(self.stream)
++        torch.mlu.current_stream().wait_stream(self.stream)
+         batch = self.batch
+         if batch is not None:
+-            record_cuda_stream(batch)
++            record_mlu_stream(batch)
+         self.preload(it)
+         return batch
+ 
+@@ -111,15 +112,15 @@ class PrefetchLoader(object):
+         return method
+ 
+ 
+-def record_cuda_stream(batch):
++def record_mlu_stream(batch):
+     if isinstance(batch, torch.Tensor):
+-        batch.record_stream(torch.cuda.current_stream())
++        batch.record_stream(torch.mlu.current_stream())
+     elif isinstance(batch, list) or isinstance(batch, tuple):
+         for t in batch:
+-            record_cuda_stream(t)
++            record_mlu_stream(t)
+     elif isinstance(batch, dict):
+         for t in batch.values():
+-            record_cuda_stream(t)
++            record_mlu_stream(t)
+     else:
+         pass
+ 
+diff --git a/minigpt4/models/Qformer.py b/minigpt4/models/Qformer.py
+index e71b123..94a196b 100644
+--- a/minigpt4/models/Qformer.py
++++ b/minigpt4/models/Qformer.py
+@@ -15,6 +15,7 @@ from dataclasses import dataclass
+ from typing import Optional, Tuple, Dict, Any
+ 
+ import torch
++import torch_mlu
+ from torch import Tensor, device, dtype, nn
+ import torch.utils.checkpoint
+ from torch import nn
+diff --git a/minigpt4/models/__init__.py b/minigpt4/models/__init__.py
+index 54acd24..6d69c8d 100644
+--- a/minigpt4/models/__init__.py
++++ b/minigpt4/models/__init__.py
+@@ -7,6 +7,7 @@
+ 
+ import logging
+ import torch
++import torch_mlu
+ from omegaconf import OmegaConf
+ 
+ from minigpt4.common.registry import registry
+diff --git a/minigpt4/models/base_model.py b/minigpt4/models/base_model.py
+index 1cd2226..55fe956 100644
+--- a/minigpt4/models/base_model.py
++++ b/minigpt4/models/base_model.py
+@@ -10,6 +10,7 @@ import os
+ 
+ import numpy as np
+ import torch
++import torch_mlu
+ import torch.nn as nn
+ from minigpt4.common.dist_utils import download_cached_file, is_dist_avail_and_initialized
+ from minigpt4.common.utils import get_abs_path, is_url
+diff --git a/minigpt4/models/blip2.py b/minigpt4/models/blip2.py
+index ee4a9dc..dfef0dd 100644
+--- a/minigpt4/models/blip2.py
++++ b/minigpt4/models/blip2.py
+@@ -11,6 +11,7 @@ import time
+ import datetime
+ 
+ import torch
++import torch_mlu
+ import torch.nn as nn
+ import torch.distributed as dist
+ import torch.nn.functional as F
+@@ -38,7 +39,7 @@ class Blip2Base(BaseModel):
+         enable_autocast = self.device != torch.device("cpu")
+ 
+         if enable_autocast:
+-            return torch.cuda.amp.autocast(dtype=dtype)
++            return torch.mlu.amp.autocast(enabled=True)
+         else:
+             return contextlib.nullcontext()
+ 
+diff --git a/minigpt4/models/blip2_outputs.py b/minigpt4/models/blip2_outputs.py
+index e8722b1..2a02faa 100644
+--- a/minigpt4/models/blip2_outputs.py
++++ b/minigpt4/models/blip2_outputs.py
+@@ -9,6 +9,7 @@ from dataclasses import dataclass
+ from typing import Optional
+ 
+ import torch
++import torch_mlu
+ from transformers.modeling_outputs import (
+     ModelOutput,
+     BaseModelOutputWithPoolingAndCrossAttentions,
+diff --git a/minigpt4/models/eva_vit.py b/minigpt4/models/eva_vit.py
+index 7fcc63a..a4a2165 100644
+--- a/minigpt4/models/eva_vit.py
++++ b/minigpt4/models/eva_vit.py
+@@ -9,6 +9,7 @@ import math
+ from functools import partial
+ 
+ import torch
++import torch_mlu
+ import torch.nn as nn
+ import torch.nn.functional as F
+ import torch.utils.checkpoint as checkpoint
+@@ -437,6 +438,6 @@ def create_eva_vit_g(img_size=224,drop_path_rate=0.4,use_checkpoint=False,precis
+ #     print(incompatible_keys)
+     
+     if precision == "fp16":
+-#         model.to("cuda") 
++#         model.to("mlu") 
+         convert_weights_to_fp16(model)
+-    return model
+\ No newline at end of file
++    return model
+diff --git a/minigpt4/models/mini_gpt4.py b/minigpt4/models/mini_gpt4.py
+index 667edd5..76ea23c 100644
+--- a/minigpt4/models/mini_gpt4.py
++++ b/minigpt4/models/mini_gpt4.py
+@@ -2,7 +2,8 @@ import logging
+ import random
+ 
+ import torch
+-from torch.cuda.amp import autocast as autocast
++import torch_mlu
++from torch.mlu.amp import autocast as autocast
+ import torch.nn as nn
+ 
+ from minigpt4.common.registry import registry
+@@ -90,8 +91,8 @@ class MiniGPT4(Blip2Base):
+             self.llama_model = LlamaForCausalLM.from_pretrained(
+                 llama_model,
+                 torch_dtype=torch.float16,
+-                load_in_8bit=True,
+-                device_map={'': device_8bit}
++                #load_in_8bit=True,
++                #device_map={'': device_8bit}
+             )
+         else:
+             self.llama_model = LlamaForCausalLM.from_pretrained(
+diff --git a/minigpt4/models/modeling_llama.py b/minigpt4/models/modeling_llama.py
+index 12d980e..eb528d9 100644
+--- a/minigpt4/models/modeling_llama.py
++++ b/minigpt4/models/modeling_llama.py
+@@ -5,6 +5,7 @@ import math
+ from typing import List, Optional, Tuple, Union
+ 
+ import torch
++import torch_mlu
+ import torch.utils.checkpoint
+ from torch import nn
+ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+diff --git a/minigpt4/processors/randaugment.py b/minigpt4/processors/randaugment.py
+index 7034a49..f2414e3 100644
+--- a/minigpt4/processors/randaugment.py
++++ b/minigpt4/processors/randaugment.py
+@@ -9,6 +9,7 @@ import cv2
+ import numpy as np
+ 
+ import torch
++import torch_mlu
+ 
+ 
+ ## aug functions
+diff --git a/minigpt4/runners/runner_base.py b/minigpt4/runners/runner_base.py
+index ccb5706..a33f371 100644
+--- a/minigpt4/runners/runner_base.py
++++ b/minigpt4/runners/runner_base.py
+@@ -13,6 +13,7 @@ import time
+ from pathlib import Path
+ 
+ import torch
++import torch_mlu
+ import torch.distributed as dist
+ import webdataset as wds
+ from minigpt4.common.dist_utils import (
+@@ -134,7 +135,7 @@ class RunnerBase:
+ 
+         if amp:
+             if self._scaler is None:
+-                self._scaler = torch.cuda.amp.GradScaler()
++                self._scaler = torch.mlu.amp.GradScaler()
+ 
+         return self._scaler
+ 
+@@ -276,8 +277,8 @@ class RunnerBase:
+         return self._dataloaders
+ 
+     @property
+-    def cuda_enabled(self):
+-        return self.device.type == "cuda"
++    def mlu_enabled(self):
++        return self.device.type == "mlu"
+ 
+     @property
+     def max_epoch(self):
+@@ -442,7 +443,7 @@ class RunnerBase:
+             optimizer=self.optimizer,
+             scaler=self.scaler,
+             lr_scheduler=self.lr_scheduler,
+-            cuda_enabled=self.cuda_enabled,
++            mlu_enabled=self.mlu_enabled,
+             log_freq=self.log_freq,
+             accum_grad_iters=self.accum_grad_iters,
+         )
+diff --git a/minigpt4/tasks/base_task.py b/minigpt4/tasks/base_task.py
+index 7ceee96..8df644b 100644
+--- a/minigpt4/tasks/base_task.py
++++ b/minigpt4/tasks/base_task.py
+@@ -9,6 +9,7 @@ import logging
+ import os
+ 
+ import torch
++import torch_mlu
+ import torch.distributed as dist
+ from minigpt4.common.dist_utils import get_rank, get_world_size, is_main_process, is_dist_avail_and_initialized
+ from minigpt4.common.logger import MetricLogger, SmoothedValue
+@@ -80,7 +81,7 @@ class BaseTask:
+     def inference_step(self):
+         raise NotImplementedError
+ 
+-    def evaluation(self, model, data_loader, cuda_enabled=True):
++    def evaluation(self, model, data_loader, mlu_enabled=True):
+         metric_logger = MetricLogger(delimiter="  ")
+         header = "Evaluation"
+         # TODO make it configurable
+@@ -89,7 +90,7 @@ class BaseTask:
+         results = []
+ 
+         for samples in metric_logger.log_every(data_loader, print_freq, header):
+-            samples = prepare_sample(samples, cuda_enabled=cuda_enabled)
++            samples = prepare_sample(samples, mlu_enabled=mlu_enabled)
+ 
+             eval_output = self.valid_step(model=model, samples=samples)
+             results.extend(eval_output)
+@@ -107,7 +108,7 @@ class BaseTask:
+         optimizer,
+         lr_scheduler,
+         scaler=None,
+-        cuda_enabled=False,
++        mlu_enabled=False,
+         log_freq=50,
+         accum_grad_iters=1,
+     ):
+@@ -120,7 +121,7 @@ class BaseTask:
+             scaler=scaler,
+             lr_scheduler=lr_scheduler,
+             log_freq=log_freq,
+-            cuda_enabled=cuda_enabled,
++            mlu_enabled=mlu_enabled,
+             accum_grad_iters=accum_grad_iters,
+         )
+ 
+@@ -134,7 +135,7 @@ class BaseTask:
+         optimizer,
+         lr_scheduler,
+         scaler=None,
+-        cuda_enabled=False,
++        mlu_enabled=False,
+         log_freq=50,
+         accum_grad_iters=1,
+     ):
+@@ -148,7 +149,7 @@ class BaseTask:
+             scaler=scaler,
+             lr_scheduler=lr_scheduler,
+             log_freq=log_freq,
+-            cuda_enabled=cuda_enabled,
++            mlu_enabled=mlu_enabled,
+             accum_grad_iters=accum_grad_iters,
+         )
+ 
+@@ -163,7 +164,7 @@ class BaseTask:
+         scaler=None,
+         start_iters=None,
+         log_freq=50,
+-        cuda_enabled=False,
++        mlu_enabled=False,
+         accum_grad_iters=1,
+     ):
+         """
+@@ -204,7 +205,7 @@ class BaseTask:
+ 
+             samples = next(data_loader)
+ 
+-            samples = prepare_sample(samples, cuda_enabled=cuda_enabled)
++            samples = prepare_sample(samples, mlu_enabled=mlu_enabled)
+             samples.update(
+                 {
+                     "epoch": inner_epoch,
+@@ -215,7 +216,7 @@ class BaseTask:
+ 
+             lr_scheduler.step(cur_epoch=inner_epoch, cur_step=i)
+ 
+-            with torch.cuda.amp.autocast(enabled=use_amp):
++            with torch.mlu.amp.autocast(enabled=use_amp):
+                 loss = self.train_step(model=model, samples=samples)
+ 
+             # after_train_step()
+diff --git a/minigpt4/tasks/image_text_pretrain.py b/minigpt4/tasks/image_text_pretrain.py
+index bbe8ec8..d20f5f2 100644
+--- a/minigpt4/tasks/image_text_pretrain.py
++++ b/minigpt4/tasks/image_text_pretrain.py
+@@ -14,5 +14,5 @@ class ImageTextPretrainTask(BaseTask):
+     def __init__(self):
+         super().__init__()
+ 
+-    def evaluation(self, model, data_loader, cuda_enabled=True):
++    def evaluation(self, model, data_loader, mlu_enabled=True):
+         pass
+diff --git a/train.py b/train.py
+index a90cb3f..8094cd8 100644
+--- a/train.py
++++ b/train.py
+@@ -11,6 +11,7 @@ import random
+ 
+ import numpy as np
+ import torch
++import torch_mlu
+ import torch.backends.cudnn as cudnn
+ 
+ import minigpt4.tasks as tasks
+@@ -36,6 +37,7 @@ def parse_args():
+     parser = argparse.ArgumentParser(description="Training")
+ 
+     parser.add_argument("--cfg-path", required=True, help="path to configuration file.")
++    parser.add_argument("--local_rank",type=int,default=0, help="local_rank")
+     parser.add_argument(
+         "--options",
+         nargs="+",
+@@ -45,8 +47,8 @@ def parse_args():
+     )
+ 
+     args = parser.parse_args()
+-    # if 'LOCAL_RANK' not in os.environ:
+-    #     os.environ['LOCAL_RANK'] = str(args.local_rank)
++    #if 'LOCAL_RANK' not in os.environ:
++    #    os.environ['LOCAL_RANK'] = str(args.local_rank)
+ 
+     return args
+ 
+diff --git a/train_configs/minigpt4_stage2_finetune.yaml b/train_configs/minigpt4_stage2_finetune.yaml
+index 1013bea..aabb658 100644
+--- a/train_configs/minigpt4_stage2_finetune.yaml
++++ b/train_configs/minigpt4_stage2_finetune.yaml
+@@ -7,7 +7,7 @@ model:
+   end_sym: "###"
+   prompt_path: "prompts/alignment.txt"
+   prompt_template: '###Human: {} ###Assistant: '
+-  ckpt: '/path/to/stage1/checkpoint/'
++  ckpt: '/workspace/prerained_minigpt4_7b.pth'
+ 
+ 
+ datasets:
+@@ -31,9 +31,9 @@ run:
+   weight_decay: 0.05
+   max_epoch: 5
+   iters_per_epoch: 200
+-  batch_size_train: 12
+-  batch_size_eval: 12
+-  num_workers: 4
++  batch_size_train: 2
++  batch_size_eval: 4
++  num_workers: 2
+   warmup_steps: 200
+ 
+   seed: 42
+@@ -45,7 +45,7 @@ run:
+   evaluate: False 
+   train_splits: ["train"]
+ 
+-  device: "cuda"
++  device: "mlu"
+   world_size: 1
+   dist_url: "env://"
+-  distributed: True
+\ No newline at end of file
++  distributed: True
