@@ -33,9 +33,9 @@ git lfs clone https://huggingface.co/lmsys/vicuna-7b-delta-v1.1
 ```shell
 # --base 和 --delta 的模型路径请根据实际位置配置
 python3 -m fastchat.model.apply_delta \
-    --base /data/llm/models/llama-7b-hf/ \
-    --delta /data/llm/models/vicuna-7b-delta-v1.1/ \
-    --target ./models/vicuna-7b-all-v1.1 \
+    --base ./data/models/llama-7b-hf/ \
+    --delta ./data/models/vicuna-7b-delta-v1.1/ \
+    --target ./data/models/vicuna-7b-all-v1.1 \
     --low-cpu-mem
 ```
 
@@ -52,16 +52,16 @@ wget https://drive.google.com/u/0/uc?id=1nJXhoEcy3KTExr17I7BXqY5Y9Lx_-n-9&export
 ### 修改配置文件
 ```shell
 # minigpt4/configs/models/minigpt4.yaml:
-llama_model: "/data/llm/models/vicuna-7b-all-v1.1"
-# eval_configs/minigpt4_eval.yaml:
-ckpt: '/data/llm/models/prerained_minigpt4_7b.pth'
+llama_model: "/home/zouguoqiang/MiniGPT4-on-MLU/data/models/vicuna-7b-all-v1.1"
+# inference_configs/minigpt4_inference.yaml:
+ckpt: "/home/zouguoqiang/MiniGPT4-on-MLU/data/models/prerained_minigpt4_7b.pth"
 # minigpt4/configs/datasets/cc_sbu/align.yaml:
-storage: ./cc_sbu_align/ 
+storage: "/home/zouguoqiang/MiniGPT4-on-MLU/data/datasets/cc_sbu_align/"
 ```
 
 ## 训练
 
-训练配置文件: train_configs/minigpt4_stage2_finetune.yaml
+训练配置文件: ./train_configs/minigpt4_stage2_finetune.yaml
 
 ```shell
 ./run_train.sh
@@ -71,11 +71,11 @@ storage: ./cc_sbu_align/
 
 ## 推理
 
-推理配置文件: eval_configs/minigpt4_eval.yaml
+推理配置文件: ./inference_configs/minigpt4_inference.yaml
 
 ```shell
 # 默认选择本地inference.jpg进行推理
 ./run_inference.sh
 ```
 
-tip: 模型默认保存位置: output/minigpt4_stage2_finetune
+模型默认保存位置: output/minigpt4_stage2_finetune

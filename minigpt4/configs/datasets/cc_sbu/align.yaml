@@ -2,4 +2,4 @@ datasets:
   cc_sbu_align:
     data_type: images
     build_info:
-      storage: /data/cc_sbu_align/
+      storage: /home/zouguoqiang/MiniGPT4-on-MLU/data/datasets/cc_sbu_align/

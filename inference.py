@@ -1,5 +1,6 @@
 import argparse
 import torch
+import time
 from PIL import Image
 from minigpt4.common.config import Config
 from minigpt4.common.registry import registry
@@ -47,6 +48,8 @@ def main():
     # Process the image and prepare the chat state
     chat.upload_img(image, chat_state, img_list)
 
+    # 开始时间
+    start_time = time.time()
     # Generate the response using the provided prompt
     chat.ask(args.prompt, chat_state)
     response = chat.answer(
@@ -57,8 +60,13 @@ def main():
         max_new_tokens=300,
         max_length=2000
     )[0]
+    # 结束时间
+    end_time = time.time()
 
-    print("Model response:", response)
+    print("======================== Model response ======================== \n", response)
+    # 总耗时
+    total_time = end_time - start_time
+    print(f"\n推理完成, 总耗时: {total_time:.2f} 秒 ({total_time/60:.2f} 分钟)")
 
 if __name__ == "__main__":
     main()
